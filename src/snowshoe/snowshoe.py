@@ -68,29 +68,32 @@ class Message:
 
 class Snowshoe:
     connection: pika.BlockingConnection
-    channel: pika.adapters.blocking_connection.BlockingChannel
+    consumer_channel: pika.adapters.blocking_connection.BlockingChannel
+    producer_channel: pika.adapters.blocking_connection.BlockingChannel
     name: str
 
-    def __init__(self, name, host: str, port: int, username: str, password: str) -> None:
+    def __init__(self, name, host: str = '127.0.0.1', port: int = 5672, username: str = None, password: str = None, vhost: str = '/') -> None:
         self.name = name
         self.connection = pika.BlockingConnection(pika.ConnectionParameters(
             host=host,
             port=port,
+            virtual_host=vhost,
             credentials=pika.PlainCredentials(
                 username=username,
                 password=password
             )
         ))
-        self.channel = self.connection.channel()
-        self.channel.exchange_declare(self.name, ExchangeType.topic)
+        self.consumer_channel = self.connection.channel()
+        self.producer_channel = self.connection.channel()
+        self.producer_channel.exchange_declare(self.name, ExchangeType.topic)
         self._threads: list[Thread] = []
 
     @retry(exceptions.AMQPConnectionError, delay=5, jitter=(1, 3))
     def run(self):
         try:
-            self.channel.start_consuming()
+            self.consumer_channel.start_consuming()
         except KeyboardInterrupt:
-            self.channel.stop_consuming()
+            self.consumer_channel.stop_consuming()
 
         for thread in self._threads:
             thread.join()
@@ -98,7 +101,7 @@ class Snowshoe:
     def define_queues(self, queues: list[Queue]):
         for queue in queues:
             queue_name = self.name + ':' + queue.name
-            self.channel.queue_declare(
+            self.consumer_channel.queue_declare(
                 queue_name,
                 passive=queue.passive,
                 durable=queue.durable,
@@ -107,17 +110,17 @@ class Snowshoe:
                 arguments=queue.arguments
             )
             for binding in queue.bindings:
-                self.channel.exchange_declare(binding.exchange, ExchangeType.topic)
-                self.channel.queue_bind(queue_name, binding.exchange, binding.routing_key)
+                self.consumer_channel.exchange_declare(binding.exchange, ExchangeType.topic)
+                self.consumer_channel.queue_bind(queue_name, binding.exchange, binding.routing_key)
 
     def emit(self, topic: str, data: dict):
-        return self.channel.basic_publish(exchange=self.name, routing_key=topic, body=json.dumps(data).encode())
+        return self.producer_channel.basic_publish(exchange=self.name, routing_key=topic, body=json.dumps(data).encode())
 
     def ack(self, delivery_tag: int = 0, multiple=False):
-        self.channel.connection.add_callback_threadsafe(functools.partial(self.channel.basic_ack, delivery_tag, multiple))
+        self.producer_channel.connection.add_callback_threadsafe(functools.partial(self.producer_channel.basic_ack, delivery_tag, multiple))
 
     def nack(self, delivery_tag: int = 0, multiple=False, requeue=True):
-        self.channel.connection.add_callback_threadsafe(functools.partial(self.channel.basic_nack, delivery_tag, multiple, requeue))
+        self.producer_channel.connection.add_callback_threadsafe(functools.partial(self.producer_channel.basic_nack, delivery_tag, multiple, requeue))
 
     def on(self, queue: str | Queue, ack_method: AckMethod = AckMethod.AUTO):
         if isinstance(queue, Queue):
@@ -151,6 +154,6 @@ class Snowshoe:
                 thread.start()
                 return thread
 
-            self.channel.basic_consume(queue=queue, on_message_callback=callback, auto_ack=ack_method == AckMethod.INSTANTLY)
+            self.consumer_channel.basic_consume(queue=queue, on_message_callback=callback, auto_ack=ack_method == AckMethod.INSTANTLY)
 
         return wrapper

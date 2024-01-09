@@ -11,7 +11,7 @@ app = snowshoe.Snowshoe(
 
 
 app.define_queues([
-    snowshoe.Queue('my_queue', [snowshoe.Queue.QueueBinding('emitter_1', 'hello')])
+    snowshoe.Queue('my_queue', [snowshoe.QueueBinding('emitter_1', 'hello')])
 ])
 
 
