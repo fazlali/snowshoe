@@ -1,9 +1,8 @@
-import snowshoe
-
+from src.snowshoe import snowshoe
 
 app = snowshoe.Snowshoe(
     name='consumer_1',
-    host='127.0.0.1',
+    host='46.102.140.9',
     port=5672,
     username='rabbit',
     password='rabbit',
@@ -20,4 +19,4 @@ def queue_message_handler(message: snowshoe.Message):
     print(message.topic, message.data, message.delivery_tag)
 
 
-app.start()
+app.run()
