@@ -153,7 +153,7 @@ class Snowshoe:
                 self.emit('_heartbeat', {'sequence': self._heartbeat['sent']})
                 sleep(10)
 
-        Thread(target=mouth, daemon=True).start()
+        Thread(target=mouth).start()
 
         queue = Queue(
             name='_heartbeat_queue',
@@ -164,20 +164,29 @@ class Snowshoe:
         self.define_queues([queue])
         self._heartbeat['consumer'] = self.on(queue, AckMethod.INSTANTLY)(ear)
 
-    @retry(exceptions.AMQPConnectionError, delay=5, jitter=(1, 3))
-    def run(self):
-        self.status = 'running'
-        self._echo()
+    def run(self, wait: bool = True):
 
-        try:
-            self.consumer_channel.start_consuming()
-        except KeyboardInterrupt:
-            self.consumer_channel.stop_consuming()
+        @retry(exceptions.AMQPConnectionError, delay=5, jitter=(1, 3))
+        def run():
+            self._main_thread_ident = get_ident()
+            self.status = 'running'
+            self._echo()
 
-        self.status = 'stopping'
-        for consumer in self._consumers:
-            if consumer != self._heartbeat['consumer']:
-                consumer['thread'].join()
+            try:
+                self.consumer_channel.start_consuming()
+            except KeyboardInterrupt:
+                self.consumer_channel.stop_consuming()
+
+            self.status = 'stopping'
+            for consumer in self._consumers:
+                if consumer != self._heartbeat['consumer']:
+                    consumer['thread'].join()
+
+        thread = Thread(target=run, daemon=True)
+        thread.start()
+        if wait:
+            thread.join()
+        return thread
 
     def pause(self):
         for consumer in self._consumers:
