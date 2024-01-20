@@ -12,4 +12,4 @@ app = Snowshoe(
 
 while True:
     app.emit('hello', {'now': time()})
-    sleep(1)
+    sleep(7)

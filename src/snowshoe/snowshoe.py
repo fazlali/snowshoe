@@ -81,6 +81,7 @@ class Consumer(TypedDict):
     ack_method: AckMethod
     handler: Callable
     tag: str | None
+    thread: Thread | None
 
 
 class Heartbeat(TypedDict):
@@ -128,7 +129,6 @@ class Snowshoe:
         self.consumer_channel = self.consumer_connection.channel()
         self.producer_channel = self.producer_connection.channel()
         self.producer_channel.exchange_declare(self.name, ExchangeType.topic)
-        self._threads: list[Thread] = []
         self._queues: dict[str, Queue] = {}
         self._consumers: list[Consumer] = []
         self._heartbeat: Heartbeat = Heartbeat(
@@ -139,6 +139,7 @@ class Snowshoe:
         )
         self.is_healthy = True
         self._main_thread_ident = get_ident()
+        self.status = 'stopped'
 
     def _echo(self):
         def ear(message: Message):
@@ -146,7 +147,7 @@ class Snowshoe:
                 self._heartbeat['received'] = message.data['sequence']
 
         def mouth():
-            while True:
+            while self.status == 'running':
                 self.is_healthy = self._heartbeat['sent'] != self._heartbeat['received']
                 self._heartbeat['sent'] += 1
                 self.emit('_heartbeat', {'sequence': self._heartbeat['sent']})
@@ -165,6 +166,7 @@ class Snowshoe:
 
     @retry(exceptions.AMQPConnectionError, delay=5, jitter=(1, 3))
     def run(self):
+        self.status = 'running'
         self._echo()
 
         try:
@@ -172,8 +174,10 @@ class Snowshoe:
         except KeyboardInterrupt:
             self.consumer_channel.stop_consuming()
 
-        for thread in self._threads:
-            thread.join()
+        self.status = 'stopping'
+        for consumer in self._consumers:
+            if consumer != self._heartbeat['consumer']:
+                consumer['thread'].join()
 
     def pause(self):
         for consumer in self._consumers:
@@ -184,10 +188,11 @@ class Snowshoe:
                     self.consumer_channel.connection.add_callback_threadsafe(
                         functools.partial(self.consumer_channel.basic_cancel, consumer['tag'])
                     )
-                # self.consumer_channel.basic_cancel(consumer['tag'])
                 consumer['tag'] = None
-        # for thread in self._threads:
-        #     thread.join()
+
+        for consumer in self._consumers:
+            if consumer != self._heartbeat['consumer'] and consumer['thread']:
+                consumer['thread'].join()
 
     def resume(self):
         not_running_consumers = [consumer for consumer in self._consumers if consumer['tag'] is None]
@@ -262,6 +267,7 @@ class Snowshoe:
             raise Exception('Invalid Queue')
 
         def wrapper(handler: Callable[[Message], any]) -> Consumer:
+
             def do_works(
                     _channel: pika.adapters.blocking_connection.BlockingChannel,
                     method: pika.spec.Basic.Deliver,
@@ -280,18 +286,19 @@ class Snowshoe:
                         self.nack(method.delivery_tag, requeue=queue.failure_method == FailureMethod.REQUEUE)
                     raise e
 
-            def callback(*args, **kwargs):
-                thread = Thread(target=do_works, args=args, kwargs=kwargs)
-                self._threads.append(thread)
-                thread.start()
-                return thread
-
             consumer = Consumer(
                 queue=queue,
                 ack_method=ack_method,
                 handler=handler,
-                tag=None
+                tag=None,
+                thread=None
             )
+
+            def callback(*args, **kwargs):
+                thread = Thread(target=do_works, args=args, kwargs=kwargs)
+                consumer['thread'] = thread
+                thread.start()
+                return thread
 
             if self._main_thread_ident == threading.get_ident():
                 self._consume(

@@ -21,6 +21,7 @@ app.define_queues([
 @app.on('my_queue')
 def queue_message_handler(message: snowshoe.Message):
     print(message.topic, message.data, message.delivery_tag)
+    sleep(5)
 
 
 def some_job():
