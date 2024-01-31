@@ -10,6 +10,8 @@ app = Snowshoe(
     password='rabbit',
 )
 
+app.run(False)
+
 while True:
     app.emit('hello', {'now': time()})
     sleep(1)

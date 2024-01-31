@@ -2,6 +2,7 @@ import functools
 import json
 import secrets
 import threading
+import uuid
 from enum import Enum
 from threading import Thread, get_ident
 from time import sleep
@@ -48,7 +49,7 @@ class Queue:
 
     def __init__(
             self,
-            name: str,
+            name: str = None,
             bindings: list[QueueBinding] = None,
             failure_method=FailureMethod.DROP,
             passive=False,
@@ -92,8 +93,7 @@ class Heartbeat(TypedDict):
 
 
 class Snowshoe:
-    consumer_connection: pika.BlockingConnection
-    publisher_connection: pika.BlockingConnection
+    connection: pika.BlockingConnection
     consumer_channel: pika.adapters.blocking_connection.BlockingChannel
     producer_channel: pika.adapters.blocking_connection.BlockingChannel
     name: str
@@ -105,10 +105,11 @@ class Snowshoe:
             port: int = 5672,
             username: str = None,
             password: str = None,
-            vhost: str = '/'
+            vhost: str = '/',
+            concurrency: int = 1
     ) -> None:
         self.name = name
-        self.consumer_connection = pika.BlockingConnection(pika.ConnectionParameters(
+        self.connection = pika.BlockingConnection(pika.ConnectionParameters(
             host=host,
             port=port,
             virtual_host=vhost,
@@ -117,17 +118,8 @@ class Snowshoe:
                 password=password
             )
         ))
-        self.producer_connection = pika.BlockingConnection(pika.ConnectionParameters(
-            host=host,
-            port=port,
-            virtual_host=vhost,
-            credentials=pika.PlainCredentials(
-                username=username,
-                password=password
-            )
-        ))
-        self.consumer_channel = self.consumer_connection.channel()
-        self.producer_channel = self.producer_connection.channel()
+        self.consumer_channel = self.connection.channel()
+        self.producer_channel = self.connection.channel()
         self.producer_channel.exchange_declare(self.name, ExchangeType.topic)
         self._queues: dict[str, Queue] = {}
         self._consumers: list[Consumer] = []
@@ -140,6 +132,7 @@ class Snowshoe:
         self.is_healthy = True
         self._main_thread_ident = get_ident()
         self.status = 'stopped'
+        self.consumer_channel.basic_qos(prefetch_count=concurrency)
 
     def _echo(self):
         def ear(message: Message):
@@ -148,18 +141,21 @@ class Snowshoe:
 
         def mouth():
             while self.status == 'running':
+                sleep(10)
                 self.is_healthy = self._heartbeat['sent'] != self._heartbeat['received']
                 self._heartbeat['sent'] += 1
                 self.emit('_heartbeat', {'sequence': self._heartbeat['sent']})
-                sleep(10)
+
+        self.emit('_heartbeat', {'sequence': self._heartbeat['sent']})
 
         Thread(target=mouth).start()
 
         queue = Queue(
-            name='_heartbeat_queue',
+            name='heartbeat[' + str(uuid.uuid4()) + ']',
             bindings=[QueueBinding(self.name, self._heartbeat['topic'])],
             durable=False,
-            exclusive=True
+            exclusive=True,
+            auto_delete=True
         )
         self.define_queues([queue])
         self._heartbeat['consumer'] = self.on(queue, AckMethod.INSTANTLY)(ear)
@@ -194,7 +190,7 @@ class Snowshoe:
                 if self._main_thread_ident == threading.get_ident():
                     self.consumer_channel.basic_cancel(consumer['tag'])
                 else:
-                    self.consumer_channel.connection.add_callback_threadsafe(
+                    self.connection.add_callback_threadsafe(
                         functools.partial(self.consumer_channel.basic_cancel, consumer['tag'])
                     )
                 consumer['tag'] = None
@@ -213,7 +209,7 @@ class Snowshoe:
     def define_queues(self, queues: list[Queue]):
         for queue in queues:
             self._queues[queue.name] = queue
-            queue_name = self.name + ':' + queue.name
+            queue_name = self.name + ':' + queue.name if queue else ''
             if queue.failure_method == FailureMethod.DLX:
                 self.consumer_channel.exchange_declare('_failed_messages_dlx', ExchangeType.topic)
                 arguments = {'x-dead-letter-exchange': FAILED_MESSAGES_DLX}
@@ -232,21 +228,36 @@ class Snowshoe:
                 self.consumer_channel.queue_bind(queue_name, binding.exchange, binding.routing_key)
 
     def emit(self, topic: str, data: dict, ttl: int = None):
-        return self.producer_channel.basic_publish(
-            exchange=self.name,
-            routing_key=topic,
-            body=json.dumps(data).encode(),
-            properties=pika.BasicProperties(
-                content_type='application/json',
-                expiration=ttl
+        if self._main_thread_ident == threading.get_ident():
+            return self.producer_channel.basic_publish(
+                exchange=self.name,
+                routing_key=topic,
+                body=json.dumps(data).encode(),
+                properties=pika.BasicProperties(
+                    content_type='application/json',
+                    expiration=ttl
+                )
             )
-        )
+
+        else:
+            self.connection.add_callback_threadsafe(
+                functools.partial(
+                    self.producer_channel.basic_publish,
+                    exchange=self.name,
+                    routing_key=topic,
+                    body=json.dumps(data).encode(),
+                    properties=pika.BasicProperties(
+                        content_type='application/json',
+                        expiration=ttl
+                    )
+                )
+            )
 
     def ack(self, delivery_tag: int = 0, multiple=False):
         if self._main_thread_ident == threading.get_ident():
             self.consumer_channel.basic_ack(delivery_tag, multiple)
         else:
-            self.consumer_channel.connection.add_callback_threadsafe(
+            self.connection.add_callback_threadsafe(
                 functools.partial(self.consumer_channel.basic_ack, delivery_tag, multiple)
             )
 
@@ -254,7 +265,7 @@ class Snowshoe:
         if self._main_thread_ident == threading.get_ident():
             self.consumer_channel.basic_nack(delivery_tag, multiple, requeue)
         else:
-            self.consumer_channel.connection.add_callback_threadsafe(
+            self.connection.add_callback_threadsafe(
                 functools.partial(self.consumer_channel.basic_nack, delivery_tag, multiple, requeue)
             )
 
@@ -284,7 +295,6 @@ class Snowshoe:
                     body: bytes
             ):
                 try:
-                    print(threading.get_ident())
                     message = Message(data=json.loads(body), topic=method.routing_key, delivery_tag=method.delivery_tag)
                     result = handler(message)
                     if ack_method == AckMethod.AUTO:
@@ -318,7 +328,7 @@ class Snowshoe:
                     consumer=consumer
                 )
             else:
-                self.consumer_channel.connection.add_callback_threadsafe(
+                self.connection.add_callback_threadsafe(
                     functools.partial(
                         self._consume,
                         channel=self.consumer_channel,
