@@ -4,6 +4,7 @@ import secrets
 import threading
 import uuid
 from enum import Enum
+from json import JSONEncoder, JSONDecoder
 from threading import Thread, get_ident
 from time import sleep
 from typing import Callable, TypedDict
@@ -106,7 +107,9 @@ class Snowshoe:
             username: str = None,
             password: str = None,
             vhost: str = '/',
-            concurrency: int = 1
+            concurrency: int = 1,
+            json_encoder_class=JSONEncoder,
+            json_decoder_class=JSONDecoder,
     ) -> None:
         self.name = name
         self.connection = pika.BlockingConnection(pika.ConnectionParameters(
@@ -133,6 +136,8 @@ class Snowshoe:
         self._main_thread_ident = get_ident()
         self.status = 'stopped'
         self.consumer_channel.basic_qos(prefetch_count=concurrency)
+        self.json_encoder = json_encoder_class()
+        self.json_decoder = json_decoder_class()
 
     def _echo(self):
         def ear(message: Message):
@@ -232,7 +237,7 @@ class Snowshoe:
             return self.producer_channel.basic_publish(
                 exchange=self.name,
                 routing_key=topic,
-                body=json.dumps(data).encode(),
+                body=self.json_encoder.encode(data).encode(),
                 properties=pika.BasicProperties(
                     content_type='application/json',
                     expiration=ttl
@@ -245,7 +250,7 @@ class Snowshoe:
                     self.producer_channel.basic_publish,
                     exchange=self.name,
                     routing_key=topic,
-                    body=json.dumps(data).encode(),
+                    body=self.json_encoder.encode(data).encode(),
                     properties=pika.BasicProperties(
                         content_type='application/json',
                         expiration=ttl
@@ -295,7 +300,7 @@ class Snowshoe:
                     body: bytes
             ):
                 try:
-                    message = Message(data=json.loads(body), topic=method.routing_key, delivery_tag=method.delivery_tag)
+                    message = Message(data=self.json_decoder.decode(body.decode()), topic=method.routing_key, delivery_tag=method.delivery_tag)
                     result = handler(message)
                     if ack_method == AckMethod.AUTO:
                         self.ack(method.delivery_tag)
