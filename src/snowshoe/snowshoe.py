@@ -49,11 +49,11 @@ class Queue:
 
 @dataclass
 class Death:
-    count: int
     reason: str
     queue: str
     time: datetime
     exchange: str
+    count: int = 1
     routing_keys: list[str] = field(default_factory=list)
 
 
@@ -63,6 +63,7 @@ class Message:
     delivery_tag: int
     topic: str
     exchange: str = None
+    first_death: Death = None
     deaths: list[Death] = field(default_factory=list)
 
 
@@ -281,16 +282,12 @@ class Snowshoe:
             def do_works(
                     _channel: pika.adapters.blocking_connection.BlockingChannel,
                     method: pika.spec.Basic.Deliver,
-                    _properties: pika.spec.BasicProperties,
+                    properties: pika.spec.BasicProperties,
                     body: bytes
             ):
                 try:
-                    message = Message(
-                        data=self.json_decoder.decode(body.decode()),
-                        topic=method.routing_key,
-                        delivery_tag=method.delivery_tag,
-                        exchange=method.exchange,
-                        deaths=[
+                    if properties.headers and properties.headers.get('x-first-death-exchange'):
+                        deaths = [
                             Death(
                                 count=item['count'],
                                 reason=item['reason'],
@@ -299,8 +296,28 @@ class Snowshoe:
                                 exchange=item['exchange'],
                                 routing_keys=item['routing-keys']
                             )
-                            for item in (_properties.headers.get('x-death', []) if _properties.headers else [])
+                            for item in properties.headers.get('x-death', [])
                         ]
+                        first_death = next((
+                            death
+                            for death in deaths
+                            if (
+                                death.queue == properties.headers['x-first-death-queue']
+                                and death.reason == properties.headers['x-first-death-reason']
+                                and death.exchange == properties.headers['x-first-death-exchange']
+                                )
+                        ), None)
+                    else:
+                        deaths = []
+                        first_death = None
+
+                    message = Message(
+                        data=self.json_decoder.decode(body.decode()),
+                        topic=method.routing_key,
+                        delivery_tag=method.delivery_tag,
+                        exchange=method.exchange,
+                        first_death=first_death,
+                        deaths=deaths
                     )
                     result = handler(message)
                     if ack_method == AckMethod.AUTO:
