@@ -299,7 +299,7 @@ class Snowshoe:
                                 exchange=item['exchange'],
                                 routing_keys=item['routing-keys']
                             )
-                            for item in _properties.headers.get('x-death', [])
+                            for item in (_properties.headers.get('x-death', []) if _properties.headers else [])
                         ]
                     )
                     result = handler(message)
