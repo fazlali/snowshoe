@@ -31,7 +31,7 @@ def some_job():
         app.pause()
 
         print('doing some work....')
-        sleep(5)
+        sleep(30)
 
         print('resuming snowshoe')
         app.resume()

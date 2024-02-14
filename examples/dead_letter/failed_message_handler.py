@@ -19,7 +19,7 @@ app.define_queues([
 
 @app.on('_failed_message_queue', ack_method=snowshoe.AckMethod.INSTANTLY)
 def queue_message_handler(message: snowshoe.Message):
-    print('received new failed message', message.topic, message.data, message.delivery_tag)
+    print('received new failed message', message.topic, message.data, message.delivery_tag, message.deaths)
 
 
 app.run()
