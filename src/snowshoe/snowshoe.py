@@ -72,7 +72,7 @@ class Consumer:
     queue: Queue
     handler: Callable
     ack_method: AckMethod
-    tag: str | None = None
+    tag: str = ''
     thread: Thread | None = None
 
 
