@@ -196,7 +196,7 @@ class Snowshoe:
 
         def mouth():
             while self.status == 'running':
-                sleep(1)
+                sleep(10)
                 if self.connection.is_closed:
                     self._is_healthy = False
                 else:
