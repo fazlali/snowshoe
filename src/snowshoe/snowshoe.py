@@ -201,7 +201,6 @@ class Snowshoe:
                     self._is_healthy = False
                 else:
                     self._is_healthy = self._heartbeat.sent == self._heartbeat.received
-                print('healthy:', self._is_healthy, self._heartbeat.sent, self._heartbeat.received)
                 self._heartbeat.sent += 1
                 self.emit(self._heartbeat.topic, {'sequence': self._heartbeat.sent})
 
