@@ -118,7 +118,7 @@ class Snowshoe:
 
         self._queues: dict[str, Queue] = {}
         self._consumers: list[Consumer] = []
-        self._heartbeat: Heartbeat = Heartbeat(topic='heartbeat:' + secrets.token_urlsafe(15))
+        self._heartbeat: Heartbeat = Heartbeat(topic='_heartbeat:' + secrets.token_urlsafe(15))
         self._is_healthy = True
         self.status = 'stopped'
         self.json_encoder = json_encoder_class()
