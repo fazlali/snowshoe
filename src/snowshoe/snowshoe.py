@@ -214,8 +214,7 @@ class Snowshoe:
         self.define_queues([queue])
         self._heartbeat.consumer = self.on(queue, AckMethod.INSTANTLY)(ear)
 
-        # self.emit('_heartbeat', {'sequence': self._heartbeat.sent})
-        Thread(target=mouth).start()
+        Thread(target=mouth, daemon=True).start()
 
     def _run(self):
         while True:
