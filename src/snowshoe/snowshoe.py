@@ -1,5 +1,6 @@
 import functools
 import secrets
+import threading
 import uuid
 import pika
 import pika.exceptions
@@ -72,7 +73,13 @@ class Consumer:
     handler: Callable
     ack_method: AckMethod
     tag: str = ''
-    thread: Thread | None = None
+    threads: list[Thread] = field(default_factory=list)
+
+    def join(self):
+        threads = self.threads.copy()
+        for thread in threads:
+            if thread.is_alive():
+                thread.join()
 
 
 @dataclass
@@ -84,9 +91,9 @@ class Heartbeat:
 
 
 class Snowshoe:
-    connection: pika.BlockingConnection
-    consumer_channel: pika.adapters.blocking_connection.BlockingChannel
-    producer_channel: pika.adapters.blocking_connection.BlockingChannel
+    connection: pika.BlockingConnection | None
+    consumer_channel: pika.adapters.blocking_connection.BlockingChannel | None
+    producer_channel: pika.adapters.blocking_connection.BlockingChannel | None
     name: str
 
     def __init__(
@@ -101,9 +108,9 @@ class Snowshoe:
             json_encoder_class=JSONEncoder,
             json_decoder_class=JSONDecoder,
     ) -> None:
-        self.connection: pika.BlockingConnection = None
-        self.consumer_channel: pika.adapters.blocking_connection.BlockingChannel = None
-        self.producer_channel: pika.adapters.blocking_connection.BlockingChannel = None
+        self.connection = None
+        self.consumer_channel = None
+        self.producer_channel = None
         self._connection_thread_ident: int = 0
         self._delivery_tags = set()
         self._thread_idents = set()
@@ -120,7 +127,7 @@ class Snowshoe:
         self._consumers: list[Consumer] = []
         self._heartbeat: Heartbeat = Heartbeat(topic='_heartbeat:' + secrets.token_urlsafe(15))
         self._is_healthy = True
-        self.status = 'stopped'
+        self._state = 'stopped'
         self.json_encoder = json_encoder_class()
         self.json_decoder = json_decoder_class()
 
@@ -131,10 +138,25 @@ class Snowshoe:
     def is_healthy(self):
         return self._is_healthy
 
+    @property
+    def status(self):
+        return {
+            'is_healthy': self.is_healthy,
+            'state': self._state,
+            'consumers': [
+                {
+                    'handler': consumer.handler.__name__,
+                    'threads': len(consumer.threads)
+                }
+                for consumer in self._consumers
+                if consumer != self._heartbeat.consumer
+            ]
+        }
+
     def ensure_connections(self):
-        while self.status == 'connecting':
+        while self._state == 'connecting':
             sleep(1)
-        self.status = 'connecting'
+        self._state = 'connecting'
         if not self.connection or self.connection.is_closed:
             try:
                 self.connection = pika.BlockingConnection(self._connection_parameters)
@@ -143,9 +165,9 @@ class Snowshoe:
                 self._delivery_tags.clear()
                 self._thread_idents.clear()
                 self._connection_thread_ident = get_ident()
-                self.status = 'running'
+                self._state = 'running'
             except Exception as e:
-                self.status = 'stopped'
+                self._state = 'stopped'
                 raise e
             self.consumer_channel.basic_qos(prefetch_count=self.concurrency)
             for consumer in self._consumers:
@@ -153,7 +175,7 @@ class Snowshoe:
 
             self.define_queues(list(self._queues.values()))
             self.resume()
-        self.status = 'running'
+        self._state = 'running'
 
     def _cancel(self, consumer_tag: str):
         return self.consumer_channel.basic_cancel(consumer_tag)
@@ -195,7 +217,7 @@ class Snowshoe:
                 self._heartbeat.received = message.data['sequence']
 
         def mouth():
-            while self.status == 'running':
+            while self._state == 'running':
                 sleep(10)
                 if self.connection.is_closed:
                     self._is_healthy = False
@@ -203,7 +225,6 @@ class Snowshoe:
                     self._is_healthy = self._heartbeat.sent == self._heartbeat.received
                 self._heartbeat.sent += 1
                 self.emit(self._heartbeat.topic, {'sequence': self._heartbeat.sent})
-
 
         queue = Queue(
             name='heartbeat[' + str(uuid.uuid4()) + ']',
@@ -231,15 +252,14 @@ class Snowshoe:
                 self.consumer_channel.stop_consuming()
                 break
 
-
         for consumer in self._consumers:
             if consumer != self._heartbeat.consumer:
-                consumer.thread.join()
+                consumer.join()
 
         self.connection.close()
 
     def run(self, wait: bool = True):
-        self.status = 'running'
+        self._state = 'running'
         self._echo()
 
         thread = Thread(target=self._run, daemon=True)
@@ -256,8 +276,8 @@ class Snowshoe:
                 consumer.tag = None
 
         for consumer in self._consumers:
-            if consumer != self._heartbeat.consumer and consumer.thread and consumer.thread.is_alive():
-                consumer.thread.join()
+            if consumer != self._heartbeat.consumer:
+                consumer.join()
 
     def resume(self):
         not_running_consumers = [consumer for consumer in self._consumers if consumer.tag is None]
@@ -286,7 +306,7 @@ class Snowshoe:
                     auto_delete=queue.auto_delete,
                     arguments=arguments
                 )
-            except pika.exceptions.ChannelClosedByBroker as e:
+            except pika.exceptions.ChannelClosedByBroker:
                 self.ensure_connections()
                 self.consumer_channel.queue_delete(queue_name, if_unused=not force, if_empty=not force)
                 self.consumer_channel.queue_declare(
@@ -307,7 +327,6 @@ class Snowshoe:
             self.connection.call_later(0, callback)
         else:
             self.connection.add_callback_threadsafe(callback)
-
 
     def emit(self, topic: str, data: dict, ttl: int = None, priority: int = None):
         self.ensure_connections()
@@ -384,6 +403,8 @@ class Snowshoe:
                     if ack_method == AckMethod.AUTO:
                         self.nack(method.delivery_tag, requeue=queue.failure_method == FailureMethod.REQUEUE)
                     raise e
+                finally:
+                    consumer.threads.remove(threading.current_thread())
 
             consumer = Consumer(
                 queue=queue,
@@ -395,7 +416,7 @@ class Snowshoe:
 
             def callback(*args, **kwargs):
                 thread = Thread(target=do_works, args=args, kwargs=kwargs)
-                consumer.thread = thread
+                consumer.threads.append(thread)
                 thread.start()
                 return thread
 
