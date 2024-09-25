@@ -74,6 +74,8 @@ class Consumer:
     ack_method: AckMethod
     tag: str = ''
     threads: list[Thread] = field(default_factory=list)
+    processed_messages: int = 0
+    failed_messages: int = 0
 
     def join(self):
         threads = self.threads.copy()
@@ -146,7 +148,9 @@ class Snowshoe:
             'consumers': [
                 {
                     'handler': consumer.handler.__name__,
-                    'threads': len(consumer.threads)
+                    'threads': len(consumer.threads),
+                    'processed_messages': consumer.processed_messages,
+                    'failed_messages': consumer.failed_messages
                 }
                 for consumer in self._consumers
                 if consumer != self._heartbeat.consumer
@@ -398,8 +402,10 @@ class Snowshoe:
                     result = handler(message)
                     if ack_method == AckMethod.AUTO:
                         self.ack(method.delivery_tag)
+                    consumer.processed_messages += 1
                     return result
                 except Exception as e:
+                    consumer.failed_messages += 1
                     if ack_method == AckMethod.AUTO:
                         self.nack(method.delivery_tag, requeue=queue.failure_method == FailureMethod.REQUEUE)
                     raise e
