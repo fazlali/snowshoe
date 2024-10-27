@@ -40,7 +40,7 @@ class Queue:
     name: str
     bindings: list[QueueBinding] = field(default_factory=list)
     passive: bool = False
-    durable: bool = False
+    durable: bool = True
     exclusive: bool = False
     auto_delete: bool = False
     max_priority: int = 0
