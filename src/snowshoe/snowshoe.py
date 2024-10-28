@@ -63,6 +63,7 @@ class Message:
     delivery_tag: int
     topic: str
     exchange: str = None
+    redelivered: bool = False
     first_death: Death = None
     deaths: list[Death] = field(default_factory=list)
 
@@ -157,11 +158,11 @@ class Snowshoe:
             ]
         }
 
-    def ensure_connections(self):
+    def ensure_connections(self, redefine_queues: bool = True):
         while self._state == 'connecting':
             sleep(1)
         self._state = 'connecting'
-        if not self.connection or self.connection.is_closed:
+        if not self.connection or self.connection.is_closed or self.consumer_channel.is_closed or self.producer_channel.is_closed:
             try:
                 self.connection = pika.BlockingConnection(self._connection_parameters)
                 self.consumer_channel = self.connection.channel()
@@ -177,7 +178,8 @@ class Snowshoe:
             for consumer in self._consumers:
                 consumer.tag = None
 
-            self.define_queues(list(self._queues.values()))
+            if redefine_queues:
+                self.define_queues(list(self._queues.values()))
             self.resume()
         self._state = 'running'
 
@@ -234,7 +236,8 @@ class Snowshoe:
             name='heartbeat[' + str(uuid.uuid4()) + ']',
             bindings=[QueueBinding(self.name, self._heartbeat.topic)],
             exclusive=True,
-            auto_delete=True
+            auto_delete=True,
+            durable=False,
         )
         self.define_queues([queue])
         self._heartbeat.consumer = self.on(queue, AckMethod.INSTANTLY)(ear)
@@ -311,7 +314,7 @@ class Snowshoe:
                     arguments=arguments
                 )
             except pika.exceptions.ChannelClosedByBroker:
-                self.ensure_connections()
+                self.ensure_connections(redefine_queues=False)
                 self.consumer_channel.queue_delete(queue_name, if_unused=not force, if_empty=not force)
                 self.consumer_channel.queue_declare(
                     queue_name,
@@ -362,43 +365,44 @@ class Snowshoe:
                     properties: pika.spec.BasicProperties,
                     body: bytes
             ):
-                try:
-                    if properties.headers and properties.headers.get('x-first-death-exchange'):
-                        deaths = [
-                            Death(
-                                count=item['count'],
-                                reason=item['reason'],
-                                queue=item['queue'],
-                                time=item['time'],
-                                exchange=item['exchange'],
-                                routing_keys=item['routing-keys']
+                if properties.headers and properties.headers.get('x-first-death-exchange'):
+                    deaths = [
+                        Death(
+                            count=item['count'],
+                            reason=item['reason'],
+                            queue=item['queue'],
+                            time=item['time'],
+                            exchange=item['exchange'],
+                            routing_keys=item['routing-keys']
+                        )
+                        for item in properties.headers.get('x-death', [])
+                    ]
+                    first_death = next((
+                        death
+                        for death in deaths
+                        if (
+                            death.queue == properties.headers['x-first-death-queue']
+                            and death.reason == properties.headers['x-first-death-reason']
+                            and death.exchange == properties.headers['x-first-death-exchange']
                             )
-                            for item in properties.headers.get('x-death', [])
-                        ]
-                        first_death = next((
-                            death
-                            for death in deaths
-                            if (
-                                death.queue == properties.headers['x-first-death-queue']
-                                and death.reason == properties.headers['x-first-death-reason']
-                                and death.exchange == properties.headers['x-first-death-exchange']
-                                )
-                        ), None)
-                    else:
-                        deaths = []
-                        first_death = None
+                    ), None)
+                else:
+                    deaths = []
+                    first_death = None
 
-                    if ack_method != AckMethod.INSTANTLY:
-                        self._delivery_tags.add(method.delivery_tag)
+                if ack_method != AckMethod.INSTANTLY:
+                    self._delivery_tags.add(method.delivery_tag)
 
-                    message = Message(
-                        data=self.json_decoder.decode(body.decode()),
-                        topic=method.routing_key,
-                        delivery_tag=method.delivery_tag,
-                        exchange=method.exchange,
-                        first_death=first_death,
-                        deaths=deaths
-                    )
+                message = Message(
+                    data=self.json_decoder.decode(body.decode()),
+                    topic=method.routing_key,
+                    delivery_tag=method.delivery_tag,
+                    exchange=method.exchange,
+                    redelivered=method.redelivered,
+                    first_death=first_death,
+                    deaths=deaths
+                )
+                try:
                     result = handler(message)
                     if ack_method == AckMethod.AUTO:
                         self.ack(method.delivery_tag)
