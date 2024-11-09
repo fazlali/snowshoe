@@ -44,6 +44,7 @@ class Queue:
     exclusive: bool = False
     auto_delete: bool = False
     max_priority: int = 0
+    consumer_timeout: int = None
     failure_method: FailureMethod = FailureMethod.DROP
 
 
@@ -303,6 +304,8 @@ class Snowshoe:
                 arguments['x-dead-letter-exchange'] = FAILED_MESSAGES_DLX
             if queue.max_priority:
                 arguments['x-max-priority'] = queue.max_priority
+            if queue.consumer_timeout is not None:
+                arguments['x-consumer-timeout'] = queue.consumer_timeout
 
             try:
                 self.consumer_channel.queue_declare(
