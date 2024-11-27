@@ -399,7 +399,7 @@ class Snowshoe:
                     self._delivery_tags.add(method.delivery_tag)
 
                 message = Message(
-                    id=properties.headers.get('x-message-id'),
+                    id=properties.headers and properties.headers.get('x-message-id'),
                     data=self.json_decoder.decode(body.decode()),
                     topic=method.routing_key,
                     delivery_tag=method.delivery_tag,
