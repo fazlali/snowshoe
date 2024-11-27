@@ -63,6 +63,7 @@ class Message:
     data: dict
     delivery_tag: int
     topic: str
+    id: str = None
     exchange: str = None
     redelivered: bool = False
     first_death: Death = None
@@ -195,7 +196,8 @@ class Snowshoe:
             properties=pika.BasicProperties(
                 content_type='application/json',
                 expiration=ttl,
-                priority=priority
+                priority=priority,
+                headers={'x-message-id': str(uuid.uuid4())}
             )
         )
 
@@ -397,6 +399,7 @@ class Snowshoe:
                     self._delivery_tags.add(method.delivery_tag)
 
                 message = Message(
+                    id=properties.headers.get('x-message-id'),
                     data=self.json_decoder.decode(body.decode()),
                     topic=method.routing_key,
                     delivery_tag=method.delivery_tag,
