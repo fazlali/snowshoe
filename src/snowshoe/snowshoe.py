@@ -195,7 +195,7 @@ class Snowshoe:
             body=self.json_encoder.encode(data).encode(),
             properties=pika.BasicProperties(
                 content_type='application/json',
-                expiration=str(ttl),
+                expiration=str(ttl) if ttl else None,
                 priority=priority,
                 headers={'x-message-id': str(uuid.uuid4())}
             )
