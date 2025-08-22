@@ -1,4 +1,5 @@
 import functools
+from inspect import isclass
 import secrets
 import threading
 import uuid
@@ -11,7 +12,7 @@ from enum import Enum
 from json import JSONEncoder, JSONDecoder
 from threading import Thread, get_ident
 from time import sleep
-from typing import Callable
+from typing import Callable, Type
 from pika.exchange_type import ExchangeType
 
 FAILED_MESSAGES_DLX = '_failed_messages_dlx'
@@ -95,6 +96,14 @@ class Heartbeat:
     consumer: Consumer | None = None
 
 
+class Midlleware:
+    def __init__(self, app: 'Snowshoe'):
+        self._app = app
+
+    def __call__(self, message: 'Message', next: Callable):
+        return next(message)
+
+
 class Snowshoe:
     connection: pika.BlockingConnection | None
     consumer_channel: pika.adapters.blocking_connection.BlockingChannel | None
@@ -138,6 +147,7 @@ class Snowshoe:
 
         self.ensure_connections()
         self.producer_channel.exchange_declare(self.name, ExchangeType.topic)
+        self._middlewares: list[Callable] = []
 
     @property
     def is_healthy(self):
@@ -185,6 +195,16 @@ class Snowshoe:
             self.resume()
         self._state = 'running'
 
+    def _apply_middlewares(self, handler):
+        def build_chain(index):
+            if index < len(self._middlewares):
+                def next_middleware(req):
+                    return self._middlewares[index](req, build_chain(index + 1))
+                return next_middleware
+            else:
+                return handler
+        return build_chain(0)
+    
     def _cancel(self, consumer_tag: str):
         return self.consumer_channel.basic_cancel(consumer_tag)
 
@@ -267,6 +287,15 @@ class Snowshoe:
                 consumer.join()
 
         self.connection.close()
+
+    def use(self, middleware: Callable | Type[Midlleware], *args, **kwargs):
+        if isclass(middleware) and issubclass(middleware, Midlleware):
+            middleware = middleware(self, *args, **kwargs)
+
+        if not callable(middleware):
+            raise Exception('Middleware must be callable or a Midlleware class')
+        
+        self._middlewares.append(middleware)
 
     def run(self, wait: bool = True):
         self._state = 'running'
@@ -363,6 +392,7 @@ class Snowshoe:
             raise Exception('Invalid Queue')
 
         def wrapper(handler: Callable[[Message], any]) -> Consumer:
+            handler = self._apply_middlewares(handler=handler)
 
             def do_works(
                     _channel: pika.adapters.blocking_connection.BlockingChannel,

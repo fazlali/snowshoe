@@ -1,6 +1,14 @@
-from time import sleep
+from time import sleep, time
 
 from snowshoe import snowshoe
+
+
+class LogMessageMiddleware(snowshoe.Midlleware):
+    def __call__(self, message: snowshoe.Message, next):
+        print('before', time(), message.id)
+        result = next(message)
+        print('after', time(), message.id)
+        return result
 
 app = snowshoe.Snowshoe(
     name='consumer_1',
@@ -10,6 +18,8 @@ app = snowshoe.Snowshoe(
     password='rabbit',
     concurrency=1
 )
+
+app.use(LogMessageMiddleware)
 
 app.define_queues([
     snowshoe.Queue('my_queue', [snowshoe.QueueBinding('emitter_1', 'hello')])
