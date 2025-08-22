@@ -1,14 +1,14 @@
 from time import sleep
 
-from src.snowshoe import snowshoe
+from snowshoe import snowshoe
 
 app = snowshoe.Snowshoe(
     name='consumer_1',
-    host='46.102.140.9',
+    host='127.0.0.1',
     port=5672,
     username='rabbit',
     password='rabbit',
-    concurrency=50
+    concurrency=1
 )
 
 app.define_queues([
@@ -19,7 +19,7 @@ app.define_queues([
 @app.on('my_queue')
 def queue_message_handler(message: snowshoe.Message):
     print(message.topic, message.data, message.delivery_tag)
-    sleep(4)
+    sleep(0.5)
 
 
 app.run()

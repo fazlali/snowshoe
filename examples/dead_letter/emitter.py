@@ -1,10 +1,10 @@
 from time import time, sleep
 
-from src.snowshoe import Snowshoe
+from snowshoe import Snowshoe
 
 app = Snowshoe(
     name='emitter_3',
-    host='46.102.140.9',
+    host='127.0.0.1',
     port=5672,
     username='rabbit',
     password='rabbit',

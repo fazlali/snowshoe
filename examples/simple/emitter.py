@@ -1,10 +1,10 @@
 from time import time, sleep
 
-from src.snowshoe import Snowshoe
+from snowshoe import Snowshoe
 
 app = Snowshoe(
     name='emitter_1',
-    host='46.102.140.9',
+    host='127.0.0.1',
     port=5672,
     username='rabbit',
     password='rabbit',
@@ -13,5 +13,7 @@ app = Snowshoe(
 app.run(False)
 
 while True:
-    app.emit('hello', {'now': time()})
+    now = time()
+    app.emit('hello', {'now': now})
+    print(now)
     sleep(1)

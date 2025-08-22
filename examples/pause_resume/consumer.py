@@ -1,12 +1,12 @@
 from threading import Thread
 from time import sleep
 
-from src.snowshoe import snowshoe
+from snowshoe import snowshoe
 
 
 app = snowshoe.Snowshoe(
     name='consumer_1',
-    host='46.102.140.9',
+    host='127.0.0.1',
     port=5672,
     username='rabbit',
     password='rabbit',
