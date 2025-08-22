@@ -96,7 +96,7 @@ class Heartbeat:
     consumer: Consumer | None = None
 
 
-class Midlleware:
+class Middleware:
     def __init__(self, app: 'Snowshoe'):
         self._app = app
 
@@ -288,12 +288,12 @@ class Snowshoe:
 
         self.connection.close()
 
-    def use(self, middleware: Callable | Type[Midlleware], *args, **kwargs):
-        if isclass(middleware) and issubclass(middleware, Midlleware):
+    def use(self, middleware: Callable | Type[Middleware], *args, **kwargs):
+        if isclass(middleware) and issubclass(middleware, Middleware):
             middleware = middleware(self, *args, **kwargs)
 
         if not callable(middleware):
-            raise Exception('Middleware must be callable or a Midlleware class')
+            raise Exception('Middleware must be callable or a Middleware class')
         
         self._middlewares.append(middleware)
 
