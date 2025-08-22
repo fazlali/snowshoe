@@ -1,1 +1,1 @@
-from .snowshoe import Snowshoe, Queue, Message, QueueBinding, AckMethod, FailureMethod, FAILED_MESSAGES_DLX
+from .snowshoe import Snowshoe, Queue, Message, QueueBinding, AckMethod, FailureMethod, Midlleware, FAILED_MESSAGES_DLX
